@@ -57,6 +57,8 @@ Both of these are in `gt-player`; a [README][player] documents further
 instructions for building therein. You'll want the ROM, at least, for
 `gt-aemu`.
 
+[player]: ./gt-player
+
 ## Utilities
 
 `dump.py` implements a debug inspector of pokemus ROM patches. You can use this
