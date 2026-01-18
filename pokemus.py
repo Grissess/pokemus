@@ -128,21 +128,30 @@ class PitchEvent(Event):
     def from_frequency(cls, time, voice, frq):
         return cls(time, voice, round(frq * 0xFFFF / Const.SAMPRATE))
 
+    @staticmethod
+    def midi_to_frequency(pitch):
+        return 440 * 2 ** ((pitch - 69) / 12)
+
     @classmethod
     def from_midi(cls, time, voice, pitch):
-        return cls.from_frequency(time, voice, 440 * 2 ** ((pitch - 69) / 12))
+        return cls.from_frequency(time, voice, cls.midi_to_frequency(pitch))
 
     PITCHES = {'a': 57, 'b': 59, 'c': 60, 'd': 62, 'e': 64, 'f': 65, 'g': 67}
     TRANSPOSE = 0
+
     @classmethod
-    def from_lynote(cls, time, voice, note):
+    def lynote_to_midi(cls, note):
         base = cls.PITCHES[note[0]] + cls.TRANSPOSE
         base += 12 * (note.count("'") - note.count(','))
         if len(note) > 1 and note[1] == 's':
             base += 1
         elif len(note) > 1 and note[1] == 'f':
             base -= 1
-        return cls.from_midi(time, voice, base)
+        return base
+
+    @classmethod
+    def from_lynote(cls, time, voice, note):
+        return cls.from_midi(time, voice, cls.lynote_to_midi(note))
 
     def start(self, tbl):
         return PlayEvent(self.time, self.voice, self.period, tbl)
@@ -235,20 +244,47 @@ class WaveLoadEvent(Event):
     def pokes(self):
         return [(self.addr, self.buf)]
 
+class SlideTo:
+    def __init__(self, pitch, animator):
+        self.pitch, self.animator = pitch, animator
+
+    @property
+    def target_pitch(self):
+        target_pitch = self.pitch
+        if isinstance(target_pitch, str):
+            target_pitch = PitchEvent.lynote_to_midi(target_pitch)
+        return target_pitch
+
+    def events(self, voice, init_pitch, start, end):
+        times = list(self.animator.times_range(start, end - start))
+        target_pitch = self.target_pitch
+        for idx, tm in enumerate(times):
+            u = idx / len(times)
+            yield PitchEvent.from_midi(tm, voice, u * target_pitch + (1 - u) * init_pitch)
+        yield PitchEvent.from_midi(end, voice, target_pitch)
+
 class Instrument:
     def __init__(self, voice, tbl):
         self.voice, self.tbl = voice, tbl
 
     def legato(self, domain, tempo, origin, notes):
         playing = False
+        last_play_time, last_pitch = None, None
         for time, pitch in notes:
             if pitch == 'r':
                 if playing:
                     domain.add(StopEvent(tempo(origin + time), self.voice))
                     playing = False
+            elif isinstance(pitch, SlideTo):
+                for ev in pitch.events(self.voice, last_pitch, last_play_time, tempo(origin + time)):
+                    domain.add(ev)
+                last_play_time = tempo(origin + time)
+                last_pitch = pitch.target_pitch
             else:
                 ev = PitchEvent.from_lynote(tempo(origin + time), self.voice, pitch)
                 if not playing:
                     ev = ev.start(self.tbl)
                     playing = True
+                last_play_time = tempo(origin + time)
+                last_pitch = PitchEvent.lynote_to_midi(pitch)
                 domain.add(ev)

@@ -30,15 +30,15 @@ d.add(ssaw2)
 
 
 def kick(o):
-    for i, tm in enumerate(a.times_points(t.beat(o), 8)):
-        ev = PitchEvent.from_frequency(tm, 5, 120 / (1 + i / 2))
+    for i, tm in enumerate(a.times_points(t.beat(o), 12)):
+        ev = PitchEvent.from_frequency(tm, 5, 400 / (1 + i))
         if i == 0:
             ev = ev.start(sin.addr)
         d.add(ev)
     d.add(StopEvent(a.time_after(t.beat(o), 8), 5))
 
 def snare(o):
-    d.add(PitchEvent.from_frequency(t.beat(o), 5, 60).start(noise.addr))
+    d.add(PitchEvent.from_frequency(t.beat(o), 5, 90).start(noise.addr))
     for i, tm in enumerate(a.times_points(t.beat(o), 4)):
         d.add(noise.atten(1 / (1 + i)).at(tm))
     d.add(StopEvent(a.time_after(t.beat(o), 4), 5))
@@ -83,11 +83,13 @@ MEL1 = [
         (27, 'r'),
 ]
 MEL2 = [
-        (0, 'c'),
+        (0, 'bf'),
+        (1, SlideTo('c', a)),
         (2.5, 'df'),
         (3.5, 'bf'),
         (6.5, 'r'),
-        (8, 'bf'),
+        (8, 'af'),
+        (9, SlideTo('bf', a)),
         (10.5, 'c'),
         (11.5, 'f'),
         (14.5, 'r'),
