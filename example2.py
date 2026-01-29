@@ -6,53 +6,81 @@ from pokemus import *
 t = Tempo(150)
 d = Domain()
 a = Animator(1 / Const.VSYNCRATE)
+m = Allocator()
 
-ssaw = WaveLoadEvent.saw(0, 0x300).atten(0.1)
+ssaw = WaveLoadEvent.saw(0, next(m)).atten(0.1)
 ssaw = ssaw.add(ssaw.harm(2).atten(0.5))
 ssaw = ssaw.add(ssaw.harm(4).atten(0.5))
 d.add(ssaw)
 
-stri = WaveLoadEvent.tri(0, 0x340).atten(0.2)
+stri = WaveLoadEvent.tri(0, next(m)).atten(0.2)
 stri = stri.add(stri.harm(2))
 d.add(stri)
 
-noise = WaveLoadEvent.noise(0, 0x380).atten(0.2)
-d.add(noise)
-
-sin = WaveLoadEvent.sin(0, 0x3C0).atten(0.3)
+sin = WaveLoadEvent.sin(0, next(m)).atten(0.3)
 d.add(sin)
 
-stri2 = stri.atten(0.5).moved(0x400)
+stri2 = stri.atten(0.5).moved(next(m))
 d.add(stri2)
 
-ssaw2 = ssaw.atten(0.5).moved(0x440)
+ssaw2 = ssaw.atten(0.5).moved(next(m))
 d.add(ssaw2)
 
+SNARE_SAMPLES = 16
+noise_seq = []
+for runout in range(SNARE_SAMPLES):
+    noise = WaveLoadEvent.noise(0, next(m)).atten(0.2 / (runout + 1))
+    noise_seq.append(noise.addr)
+    d.add(noise)
 
+
+sa = Animator(2 / Const.VSYNCRATE)
+snare_inst = Instrument(4, TableSeq(noise_seq, sa))
+def snare(o, size=SNARE_SAMPLES):
+    snare_inst.legato(d, t.beat, o, [
+        (0, 60),
+        (sa.time_after(0, size), 'r'),
+    ])
+
+KICK_POINTS = 5
 def kick(o):
-    for i, tm in enumerate(a.times_points(t.beat(o), 12)):
+    for i, tm in enumerate(a.times_points(t.beat(o), KICK_POINTS)):
         ev = PitchEvent.from_frequency(tm, 5, 400 / (1 + i))
         if i == 0:
             ev = ev.start(sin.addr)
         d.add(ev)
-    d.add(StopEvent(a.time_after(t.beat(o), 8), 5))
+    d.add(StopEvent(a.time_after(t.beat(o), KICK_POINTS), 5))
 
-def snare(o):
-    d.add(PitchEvent.from_frequency(t.beat(o), 5, 90).start(noise.addr))
-    for i, tm in enumerate(a.times_points(t.beat(o), 4)):
-        d.add(noise.atten(1 / (1 + i)).at(tm))
-    d.add(StopEvent(a.time_after(t.beat(o), 4), 5))
+# def snare(o):
+#     d.add(PitchEvent.from_frequency(t.beat(o), 5, 90).start(noise.addr))
+#     for i, tm in enumerate(a.times_points(t.beat(o), 4)):
+#         d.add(noise.atten(1 / (1 + i)).at(tm))
+#     d.add(StopEvent(a.time_after(t.beat(o), 4), 5))
 
-def rhy(o, tail=False, clip=False):
-    kick(o)
+def rhy(o, tail=False, clip=False, vara=False, varb1=False, varb2=False):
+    if varb2:
+        kick(o + 0.25)
+    else:
+        kick(o)
     kick(o + 0.5)
     snare(o + 1)
+    if vara:
+        kick(o + 1)
+        kick(o + 1.5)
     kick(o + 1.75)
     if not clip:
         kick(o + 2.25)
-        snare(o + 3)
+        if vara:
+            kick(o + 2.5)
+            kick(o + 3)
+        snare(o + 3, **({'size': 5} if varb2 else {}))
         if tail:
             kick(o + 3.5)
+            if varb1:
+                kick(o + 3.75)
+            if varb2:
+                snare(o + 3.5, size=3)
+                snare(o + 3.75)
 
 def wind(o):
     snare(o)
@@ -200,14 +228,14 @@ BL.legato(d, t.beat, 32, BASS1)
 LEAD2.legato(d, t.beat, 62, MELLEAD)
 
 for i in range(64, 96, 4):
-    rhy(i, tail=i % 8 == 4)
+    rhy(i, tail=True, vara=True, varb1=i == 88, varb2=i == 92)
 LEAD2.legato(d, t.beat, 64, MEL1)
 ARI2.legato(d, t.beat, 64, ARP)
 BL.legato(d, t.beat, 64, BASS2)
 LEAD2.legato(d, t.beat, 94, MELLEAD)
 
 for i in range(96, 128, 4):
-    rhy(i, tail=i % 8 == 4)
+    rhy(i, tail=True, vara=True, varb1=i == 120, varb2=i == 124)
 LEAD2.legato(d, t.beat, 96, MEL2)
 ARI2.legato(d, t.beat, 96, ARP)
 BL.legato(d, t.beat, 96, BASS2)

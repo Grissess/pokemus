@@ -7,6 +7,20 @@ class Const:
     V_TBL = 0x04
     SAMPRATE = 44192
     VSYNCRATE = 60
+    TABLESIZE = 0x40
+    TABLEBASE = 0x300
+    RAMEND = 0x1000
+
+class Allocator:
+    def __init__(self, start=Const.TABLEBASE, stride=Const.TABLESIZE, end=Const.RAMEND):
+        self.start, self.stride, self.end = start, stride, end
+        self.iter = self._iterator()
+
+    def _iterator(self):
+        return iter(range(self.start, self.end, self.stride))
+
+    def __next__(self):
+        return next(self.iter)
 
 class Tempo:
     def __init__(self, bpm):
@@ -132,6 +146,10 @@ class PitchEvent(Event):
     def midi_to_frequency(pitch):
         return 440 * 2 ** ((pitch - 69) / 12)
 
+    @staticmethod
+    def frequency_to_midi(freq):
+        return math.log(freq / 440, 2) * 12 + 69
+
     @classmethod
     def from_midi(cls, time, voice, pitch):
         return cls.from_frequency(time, voice, cls.midi_to_frequency(pitch))
@@ -172,6 +190,17 @@ class PlayEvent(PitchEvent):
 
     def pokes(self):
         return [(Const.V_BASE + Const.V_SIZE * self.voice + Const.V_TBL, (0x8000 | self.tbl).to_bytes(2, 'little'))] + super().pokes()
+
+class ChangeTable(Event):
+    def __init__(self, time, voice, tbl):
+        super().__init__(time)
+        self.voice, self.tbl = voice, tbl
+
+    def at(self, nt):
+        return type(self)(nt, self.voice, self.tbl)
+
+    def pokes(self):
+        return [(Const.V_BASE + Const.V_SIZE * self.voice + Const.V_TBL, (0x8000 | self.tbl).to_bytes(2, 'little'))]
 
 class StopEvent(Event):
     def __init__(self, time, voice):
@@ -263,28 +292,71 @@ class SlideTo:
             yield PitchEvent.from_midi(tm, voice, u * target_pitch + (1 - u) * init_pitch)
         yield PitchEvent.from_midi(end, voice, target_pitch)
 
+class TableSeq:
+    def __init__(self, tables, anim = None):
+        self.tables, self.anim = tables, anim
+        self.started_at, self.offset = None, 0
+
+    def handle_just_started(self, time, voice=None, period=None):
+        if voice is None and period is None:
+            # assume "time" is a PitchEvent
+            return self.handle_just_started(time.time, time.voice, time.period)
+        self.started_at, self.offset = time, 0
+        return PlayEvent(time, voice, period, self.tables[0])
+
+    def handle_continued(self, time, voice):
+        if self.started_at is None or self.anim is None:
+            return []
+        events = []
+        for t in self.anim.times_range(self.started_at, time - self.started_at):
+            if t == self.started_at:
+                continue
+            self.started_at = t
+            self.offset += 1
+            if self.offset >= len(self.tables):
+                break
+            events.append(ChangeTable(t, voice, self.tables[self.offset]))
+        return events
+
+
 class Instrument:
     def __init__(self, voice, tbl):
+        if not isinstance(tbl, TableSeq):
+            tbl = TableSeq([tbl])
         self.voice, self.tbl = voice, tbl
 
     def legato(self, domain, tempo, origin, notes):
         playing = False
         last_play_time, last_pitch = None, None
         for time, pitch in notes:
+            tm = tempo(origin + time)
             if pitch == 'r':
                 if playing:
-                    domain.add(StopEvent(tempo(origin + time), self.voice))
+                    for tchg in self.tbl.handle_continued(tm, self.voice):
+                        domain.add(tchg)
+                    domain.add(StopEvent(tm, self.voice))
                     playing = False
             elif isinstance(pitch, SlideTo):
                 for ev in pitch.events(self.voice, last_pitch, last_play_time, tempo(origin + time)):
                     domain.add(ev)
-                last_play_time = tempo(origin + time)
+                for tchg in self.tbl.handle_continued(tm, self.voice):
+                    domain.add(tchg)
+                last_play_time = tm
                 last_pitch = pitch.target_pitch
             else:
-                ev = PitchEvent.from_lynote(tempo(origin + time), self.voice, pitch)
+                if isinstance(pitch, str):
+                    ev = PitchEvent.from_lynote(tm, self.voice, pitch)
+                else:  # assume int
+                    ev = PitchEvent.from_frequency(tm, self.voice, pitch)
                 if not playing:
-                    ev = ev.start(self.tbl)
+                    ev = self.tbl.handle_just_started(ev)
                     playing = True
-                last_play_time = tempo(origin + time)
-                last_pitch = PitchEvent.lynote_to_midi(pitch)
+                else:
+                    for tchg in self.tbl.handle_continued(tm, self.voice):
+                        domain.add(tchg)
+                last_play_time = tm
+                if isinstance(pitch, str):
+                    last_pitch = PitchEvent.lynote_to_midi(pitch)
+                else:
+                    last_pitch = PitchEvent.frequency_to_midi(pitch)
                 domain.add(ev)
